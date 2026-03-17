@@ -1,27 +1,19 @@
 {
   "name": "configuration-service",
   "version": "1.0.0",
-  "description": "CLI-based configuration management service for platform teams",
-  "main": "src/cli.js",
-  "bin": {
-    "config": "./src/cli.js"
-  },
+  "description": "",
+  "main": "index.js",
   "scripts": {
-    "test": "jest --coverage",
-    "test:watch": "jest --watch",
-    "start": "node src/cli.js"
+    "test": "jest --coverage"
   },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
   "dependencies": {
-    "commander": "^12.0.0"
+    "commander": "^14.0.3"
   },
   "devDependencies": {
-    "jest": "^29.0.0"
-  },
-  "jest": {
-    "testEnvironment": "node",
-    "coverageDirectory": "coverage",
-    "collectCoverageFrom": [
-      "src/**/*.js"
-    ]
+    "jest": "^30.3.0"
   }
 }

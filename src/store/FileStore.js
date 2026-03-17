@@ -1,63 +1,52 @@
-'use strict';
-
 const fs = require('fs');
 const path = require('path');
-const Store = require('./Store');
 
-const DEFAULT_DATA_FILE = path.join(
-  process.env.HOME || process.env.USERPROFILE || '/tmp',
-  '.config-service-data.json'
-);
+const DEFAULT_FILE = path.join(__dirname, '..', '..', 'data', 'store.json');
 
-/**
- * File-backed store. All mutations are written atomically by serialising the
- * entire state to JSON before committing, so a validation failure rolls back
- * the whole operation without touching persisted data.
- */
-class FileStore extends Store {
-  constructor(dataFile = DEFAULT_DATA_FILE) {
-    super();
-    this.dataFile = dataFile;
-    this._data = this._load();
+class FileStore {
+  constructor(filePath = DEFAULT_FILE) {
+    this._filePath = filePath;
+    this._data = { environments: [], services: {}, configs: {} };
+    this._load();
   }
-
-  // ── persistence ──────────────────────────────────────────────────────────
 
   _load() {
     try {
-      const raw = fs.readFileSync(this.dataFile, 'utf8');
-      return JSON.parse(raw);
+      const raw = fs.readFileSync(this._filePath, 'utf8');
+      this._data = JSON.parse(raw);
     } catch {
-      return { environments: [], services: {}, configs: {} };
+      this._data = { environments: [], services: {}, configs: {} };
     }
   }
 
-  _save() {
-    fs.writeFileSync(this.dataFile, JSON.stringify(this._data, null, 2), 'utf8');
+  _persist() {
+    const dir = path.dirname(this._filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(this._filePath, JSON.stringify(this._data, null, 2));
   }
 
-  // ── environments ─────────────────────────────────────────────────────────
-
-  async addEnvironment(name) {
+  // Environments
+  addEnvironment(name) {
     if (this._data.environments.includes(name)) {
       throw new Error(`Environment "${name}" already exists`);
     }
     this._data.environments.push(name);
-    this._save();
+    this._persist();
   }
 
-  async environmentExists(name) {
+  environmentExists(name) {
     return this._data.environments.includes(name);
   }
 
-  async listEnvironments() {
+  listEnvironments() {
     return [...this._data.environments];
   }
 
-  // ── services ─────────────────────────────────────────────────────────────
-
-  async addService(name, environment) {
-    if (!this._data.environments.includes(environment)) {
+  // Services
+  addService(name, environment) {
+    if (!this.environmentExists(environment)) {
       throw new Error(`Environment "${environment}" does not exist`);
     }
     if (!this._data.services[name]) {
@@ -67,100 +56,66 @@ class FileStore extends Store {
       throw new Error(`Service "${name}" already registered in environment "${environment}"`);
     }
     this._data.services[name].push(environment);
-    this._save();
+    this._persist();
   }
 
-  async serviceExistsInEnvironment(name, environment) {
-    return (this._data.services[name] || []).includes(environment);
+  serviceExistsInEnvironment(name, environment) {
+    return !!(this._data.services[name] && this._data.services[name].includes(environment));
   }
 
-  async listServices() {
+  listServices() {
     return Object.entries(this._data.services).map(([name, environments]) => ({
       name,
-      environments: [...environments],
+      environments,
     }));
   }
 
-  // ── configs ───────────────────────────────────────────────────────────────
-
-  _configKey(service, environment) {
-    return `${service}:${environment}`;
+  // Configs
+  getConfig(service, environment) {
+    const key = `${service}:${environment}`;
+    return this._data.configs[key] || null;
   }
 
-  async getConfig(service, environment) {
-    const key = this._configKey(service, environment);
-    const entry = this._data.configs[key];
-    if (!entry) return null;
-    return {
-      ...entry,
-      data: { ...entry.data },
-    };
-  }
-
-  /**
-   * Sets a single key on an existing config entry.
-   * Creates the entry if it doesn't exist yet.
-   * @param {string} service
-   * @param {string} environment
-   * @param {string} key
-   * @param {string|number|boolean} value - already parsed/validated
-   */
-  async setConfig(service, environment, key, value) {
-    if (!await this.serviceExistsInEnvironment(service, environment)) {
+  setConfig(service, environment, key, value) {
+    if (!this.serviceExistsInEnvironment(service, environment)) {
       throw new Error(`Service "${service}" is not registered in environment "${environment}"`);
     }
-
-    const configKey = this._configKey(service, environment);
-    const now = new Date().toISOString();
-
-    if (!this._data.configs[configKey]) {
-      this._data.configs[configKey] = {
+    const storeKey = `${service}:${environment}`;
+    const existing = this._data.configs[storeKey];
+    if (existing) {
+      existing.data[key] = value;
+      existing.updatedAt = new Date().toISOString();
+    } else {
+      this._data.configs[storeKey] = {
         service,
         environment,
-        data: {},
-        createdAt: now,
-        updatedAt: now,
+        data: { [key]: value },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
     }
-
-    this._data.configs[configKey].data[key] = value;
-    this._data.configs[configKey].updatedAt = now;
-    this._save();
+    this._persist();
   }
 
-  /**
-   * Atomically merges `data` into the existing config.
-   * Validation must happen BEFORE calling this method.
-   * If this._save() throws (e.g. disk full) the in-memory state is still
-   * updated; callers at the command layer handle I/O errors.
-   * @param {string} service
-   * @param {string} environment
-   * @param {Record<string, string|number|boolean>} data - already validated
-   */
-  async updateConfig(service, environment, data) {
-    if (!await this.serviceExistsInEnvironment(service, environment)) {
+  updateConfig(service, environment, data) {
+    if (!this.serviceExistsInEnvironment(service, environment)) {
       throw new Error(`Service "${service}" is not registered in environment "${environment}"`);
     }
-
-    const configKey = this._configKey(service, environment);
-    const now = new Date().toISOString();
-
-    // Build the next state in a local copy first – atomicity guarantee
-    const existing = this._data.configs[configKey];
-    const nextEntry = {
-      service,
-      environment,
-      data: {
-        ...(existing ? existing.data : {}),
-        ...data,
-      },
-      createdAt: existing ? existing.createdAt : now,
-      updatedAt: now,
-    };
-
-    // Commit only after the full merge is ready
-    this._data.configs[configKey] = nextEntry;
-    this._save();
+    const storeKey = `${service}:${environment}`;
+    const existing = this._data.configs[storeKey];
+    if (existing) {
+      existing.data = { ...existing.data, ...data };
+      existing.updatedAt = new Date().toISOString();
+    } else {
+      this._data.configs[storeKey] = {
+        service,
+        environment,
+        data: { ...data },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    this._persist();
   }
 }
 

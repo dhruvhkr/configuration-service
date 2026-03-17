@@ -1,30 +1,26 @@
 # Configuration Service
 
-A CLI tool for managing application configurations across environments, built for platform teams.
+A CLI tool for managing service configurations across multiple environments. Store, retrieve, and update key-value config data per service and environment using a local JSON file store.
 
-## Requirements
-
-- Node.js >= 18
-- npm >= 9
-
-## Setup
+## Installation
 
 ```bash
 npm install
-npm link        # optional: makes `config` available globally
 ```
 
 ## Usage
 
-All commands follow the pattern: `node src/cli.js <command> [args]`
-After `npm link`, replace `node src/cli.js` with `config`.
+Run commands via:
+
+```bash
+node src/cli.js <command> [args]
+```
 
 ### Environments
 
 ```bash
-# Register a new environment
-node src/cli.js add-environment staging
-node src/cli.js add-environment production
+# Add a new environment
+node src/cli.js add-environment <name>
 
 # List all environments
 node src/cli.js list-environments
@@ -33,92 +29,62 @@ node src/cli.js list-environments
 ### Services
 
 ```bash
-# Onboard a service into an environment
-node src/cli.js add-service payment-service staging
-node src/cli.js add-service payment-service production
+# Register a service in an environment
+node src/cli.js add-service <service> <environment>
 
 # List all services and their environments
 node src/cli.js list-services
 ```
 
-### Configuration
+### Configs
 
 ```bash
-# Set a single configuration key
-node src/cli.js set-config payment-service production timeout_seconds 30
-node src/cli.js set-config payment-service production enable_logging true
-node src/cli.js set-config payment-service production gateway_url https://api.example.com
+# Set a single config key
+node src/cli.js set-config <service> <environment> <key> <value>
 
-# Atomically update multiple keys at once
-node src/cli.js update-config payment-service production \
-  '{"timeout_seconds": 30, "retry_attempts": 3, "enable_logging": true, "max_connections": 100}'
+# Atomically update multiple config keys from a JSON string
+node src/cli.js update-config <service> <environment> '{"key1":"val1","key2":"val2"}'
 
-# Retrieve config for a service in an environment
-node src/cli.js get-config payment-service production
+# Get all config for a service in an environment
+node src/cli.js get-config <service> <environment>
 ```
 
-## Running Tests
+## Example
 
 ```bash
-npm test                # run all tests with coverage report
-npm run test:watch      # watch mode
+node src/cli.js add-environment production
+node src/cli.js add-service auth-service production
+node src/cli.js set-config auth-service production DB_HOST localhost
+node src/cli.js update-config auth-service production '{"DB_PORT":5432,"DEBUG":false}'
+node src/cli.js get-config auth-service production
 ```
 
-## Architecture
+## Data Storage
 
-```
-configuration-service/
-├── src/
-│   ├── cli.js                   # Commander entrypoint – wires program + store + commands
-│   ├── store/
-│   │   ├── Store.js             # Abstract base class (interface)
-│   │   └── FileStore.js        # JSON file-backed implementation
-│   ├── commands/
-│   │   ├── environment.js       # add-environment, list-environments
-│   │   ├── service.js           # add-service, list-services
-│   │   └── config.js            # set-config, update-config, get-config
-│   └── validation/
-│       └── validator.js         # Type checking, name validation, CLI value parsing
-└── tests/
-    ├── validator.test.js
-    ├── FileStore.test.js
-    └── commands.test.js
+Config is persisted to `data/store.json` at the project root. This file is created automatically on first write.
+
+Config values must be flat (strings, numbers, or booleans — no nested objects).
+
+## Testing
+
+```bash
+npm test
 ```
 
-### Design Decisions
+Tests are written with Jest and include coverage reporting.
 
-**Store abstraction** — `Store.js` defines a clean interface. Switching from `FileStore` to a Postgres or Redis-backed store requires implementing the same interface, with no changes to command logic.
+## Project Structure
 
-**Atomic updates** — `update-config` validates the entire payload before calling the store. If any key fails type validation, the store is never touched — all-or-nothing semantics are enforced at the command layer, not the store layer.
-
-**Type inference for CLI values** — `set-config` takes a raw string argument and infers the type: `"true"/"false"` → boolean, numeric strings → number, everything else → string. This avoids requiring users to specify types explicitly.
-
-**Flat config validation** — only `string`, `number`, and `boolean` primitives are accepted as values. Nested objects and arrays are rejected with clear error messages.
-
-**Persistence** — data is stored in `~/.config-service-data.json`. The file is written synchronously on each mutation so the state is always consistent. A future database adapter would replace the `_save`/`_load` pair in `FileStore`.
-
-## Data Model
-
-```json
-{
-  "environments": ["dev", "staging", "production"],
-  "services": {
-    "payment-service": ["staging", "production"]
-  },
-  "configs": {
-    "payment-service:production": {
-      "service": "payment-service",
-      "environment": "production",
-      "data": {
-        "payment_gateway_url": "https://config.infraspec.dev/api",
-        "timeout_seconds": 60,
-        "retry_attempts": 3,
-        "enable_logging": true,
-        "max_connections": 100
-      },
-      "createdAt": "2026-01-01T00:00:00.000Z",
-      "updatedAt": "2026-01-02T12:00:00.000Z"
-    }
-  }
-}
+```
+src/
+  cli.js               # CLI entry point (Commander)
+  store/
+    FileStore.js       # JSON file-based persistence layer
+  validation/
+    validator.js       # Input validation helpers
+tests/
+  FileStore.test.js
+  validator.test.js
+data/
+  store.json           # Auto-generated config store (gitignored)
 ```
